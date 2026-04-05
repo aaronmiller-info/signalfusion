@@ -60,8 +60,9 @@ def write_signals(
 
     row = [symbol, timestamp] + [values.get(name) for name in FEATURE_NAMES]
 
+    col_list = ", ".join(f'"{c}"' for c in cols)
     conn.execute(
-        f'INSERT INTO signals ({", ".join(f\'"{c}\' for c in cols)}) '
+        f"INSERT INTO signals ({col_list}) "
         f"VALUES ({placeholders}) "
         f"ON CONFLICT(symbol, timestamp) DO UPDATE SET {updates}",
         row,
@@ -95,8 +96,9 @@ def write_signals_batch(
         row = [symbol, ts] + [values.get(name) for name in FEATURE_NAMES]
         batch.append(row)
 
+    col_list = ", ".join(f'"{c}"' for c in cols)
     conn.executemany(
-        f'INSERT INTO signals ({", ".join(f\'"{c}\' for c in cols)}) '
+        f"INSERT INTO signals ({col_list}) "
         f"VALUES ({placeholders}) "
         f"ON CONFLICT(symbol, timestamp) DO UPDATE SET {updates}",
         batch,
