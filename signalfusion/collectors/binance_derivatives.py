@@ -1,10 +1,13 @@
 """
-Binance derivatives collector — fetches funding rates, open interest,
-long/short ratios, and liquidations from Binance Futures public API.
-No API key required for public endpoints.
+Derivatives collector — fetches funding rates, open interest, and related
+signals from OKX public API (US-accessible, no auth required).
 
 Signals: funding_rate, open_interest, open_interest_delta, long_short_ratio,
          liquidation_volume, top_trader_long_ratio, basis_annualized, taker_buy_ratio
+
+Note: Originally used Binance Futures API, switched to OKX because
+Binance.com is geo-blocked in the US. OKX provides funding rate and
+open interest publicly; other signals are stubbed as None.
 """
 
 from __future__ import annotations
@@ -16,21 +19,26 @@ import httpx
 from signalfusion.collectors.base import Collector
 from signalfusion.data.schema import SYMBOLS
 
-# Binance futures symbol mapping
-BINANCE_SYMBOLS = {
-    "BTC/USD": "BTCUSDT",
-    "ETH/USD": "ETHUSDT",
-    "SOL/USD": "SOLUSDT",
-    "XRP/USD": "XRPUSDT",
-    "LINK/USD": "LINKUSDT",
-    "AVAX/USD": "AVAXUSDT",
+# OKX instrument ID mapping (perpetual swaps)
+OKX_INSTRUMENTS = {
+    "BTC/USD": "BTC-USDT-SWAP",
+    "ETH/USD": "ETH-USDT-SWAP",
+    "SOL/USD": "SOL-USDT-SWAP",
+    "XRP/USD": "XRP-USDT-SWAP",
+    "LINK/USD": "LINK-USDT-SWAP",
+    "AVAX/USD": "AVAX-USDT-SWAP",
 }
+
+OKX_BASE = "https://www.okx.com/api/v5"
 
 
 class BinanceDerivativesCollector(Collector):
-    """Fetches derivatives data from Binance Futures public API."""
+    """
+    Fetches derivatives data from OKX public API.
 
-    BASE_URL = "https://fapi.binance.com"
+    Class name kept as BinanceDerivativesCollector for backward compatibility
+    with run.py imports.
+    """
 
     @property
     def name(self) -> str:
@@ -49,8 +57,8 @@ class BinanceDerivativesCollector(Collector):
 
         async with httpx.AsyncClient(timeout=30) as client:
             for symbol in symbols:
-                bsym = BINANCE_SYMBOLS.get(symbol)
-                if not bsym:
+                inst_id = OKX_INSTRUMENTS.get(symbol)
+                if not inst_id:
                     continue
 
                 values: dict[str, float | None] = {}
@@ -58,54 +66,35 @@ class BinanceDerivativesCollector(Collector):
                 try:
                     # Funding rate
                     resp = await client.get(
-                        f"{self.BASE_URL}/fapi/v1/fundingRate",
-                        params={"symbol": bsym, "limit": 1},
+                        f"{OKX_BASE}/public/funding-rate",
+                        params={"instId": inst_id},
                     )
                     data = resp.json()
-                    if data and isinstance(data, list):
-                        values["funding_rate"] = float(data[-1].get("fundingRate", 0))
+                    if data.get("code") == "0" and data.get("data"):
+                        entry = data["data"][0]
+                        values["funding_rate"] = float(entry.get("fundingRate", 0))
 
-                    # Open interest
+                    # Open interest (in USD)
                     resp = await client.get(
-                        f"{self.BASE_URL}/fapi/v1/openInterest",
-                        params={"symbol": bsym},
+                        f"{OKX_BASE}/public/open-interest",
+                        params={"instId": inst_id},
                     )
                     data = resp.json()
-                    if isinstance(data, dict):
-                        values["open_interest"] = float(data.get("openInterest", 0))
+                    if data.get("code") == "0" and data.get("data"):
+                        entry = data["data"][0]
+                        values["open_interest"] = float(entry.get("oiUsd", 0))
 
-                    # Long/short ratio (global)
-                    resp = await client.get(
-                        f"{self.BASE_URL}/futures/data/globalLongShortAccountRatio",
-                        params={"symbol": bsym, "period": "5m", "limit": 1},
-                    )
-                    data = resp.json()
-                    if data and isinstance(data, list):
-                        values["long_short_ratio"] = float(data[-1].get("longShortRatio", 1.0))
-
-                    # Top trader long/short ratio
-                    resp = await client.get(
-                        f"{self.BASE_URL}/futures/data/topLongShortPositionRatio",
-                        params={"symbol": bsym, "period": "5m", "limit": 1},
-                    )
-                    data = resp.json()
-                    if data and isinstance(data, list):
-                        values["top_trader_long_ratio"] = float(
-                            data[-1].get("longAccount", 0.5)
-                        )
-
-                    # Taker buy/sell volume
-                    resp = await client.get(
-                        f"{self.BASE_URL}/futures/data/takerlongshortRatio",
-                        params={"symbol": bsym, "period": "5m", "limit": 1},
-                    )
-                    data = resp.json()
-                    if data and isinstance(data, list):
-                        values["taker_buy_ratio"] = float(data[-1].get("buyVol", 0.5))
+                    # Signals not available from OKX public API without auth
+                    values["open_interest_delta"] = None
+                    values["long_short_ratio"] = None
+                    values["liquidation_volume"] = None
+                    values["top_trader_long_ratio"] = None
+                    values["basis_annualized"] = None
+                    values["taker_buy_ratio"] = None
 
                     result[symbol] = [(now, values)]
 
                 except Exception as e:
-                    print(f"  Binance derivatives error for {symbol}: {e}")
+                    print(f"  OKX derivatives error for {symbol}: {e}")
 
         return result

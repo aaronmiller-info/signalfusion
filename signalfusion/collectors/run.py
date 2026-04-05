@@ -16,12 +16,18 @@ import time
 from signalfusion.collectors.base import init_db, write_signals_batch, DB_PATH
 from signalfusion.collectors.kraken_ohlcv import KrakenOHLCVCollector
 from signalfusion.collectors.binance_derivatives import BinanceDerivativesCollector
+from signalfusion.collectors.macro import MacroCollector
+from signalfusion.collectors.sentiment import SentimentCollector
+from signalfusion.collectors.coingecko import CoinGeckoCollector
 from signalfusion.data.schema import SYMBOLS
 
 
 ALL_COLLECTORS = [
     KrakenOHLCVCollector(),
     BinanceDerivativesCollector(),
+    MacroCollector(),
+    SentimentCollector(),
+    CoinGeckoCollector(),
 ]
 
 
