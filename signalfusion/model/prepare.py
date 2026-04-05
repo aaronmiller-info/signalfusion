@@ -276,7 +276,7 @@ class SignalDataset(Dataset):
         # Build valid indices (have full window AND valid label)
         self.valid_indices = []
         for t in range(seq_len, len(features)):
-            if labels[t] >= 0 and not np.any(np.isnan(features[t - seq_len : t])):
+            if labels[t] >= 0:
                 self.valid_indices.append(t)
         self.valid_indices = np.array(self.valid_indices)
 
@@ -320,8 +320,18 @@ def prepare_datasets(
     raw = raw_data[symbol]
     num_bars = len(raw)
 
-    # Normalize
+    # Detect active features (columns that have at least some non-NaN data)
+    active_mask = ~np.all(np.isnan(raw), axis=0)
+    active_indices = np.where(active_mask)[0]
+    active_names = [FEATURE_NAMES[i] for i in active_indices]
+    print(f"  Active features: {len(active_names)}/{NUM_FEATURES} — {active_names}")
+
+    # Normalize (full array)
     normalized = normalize_features(raw)
+
+    # Keep only active features and fill remaining NaN with 0
+    normalized = normalized[:, active_indices]
+    normalized = np.nan_to_num(normalized, nan=0.0)
 
     # Close prices for labels (column index from schema)
     close_idx = FEATURE_NAMES.index("close")
@@ -365,6 +375,8 @@ def prepare_datasets(
         "val_end_idx": val_end,
         "val_regime_windows": val_regime_windows,
         "close_prices_val": close_prices[train_end:val_end],
+        "active_features": active_names,
+        "num_active_features": len(active_names),
     }
 
     return train_ds, val_ds, holdout_ds, metadata

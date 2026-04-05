@@ -68,15 +68,29 @@ SYMBOL = "BTC/USD"
 # Feature grouping
 # ---------------------------------------------------------------------------
 
-def get_active_features() -> dict[Layer, list[int]]:
-    """Map each active layer to its feature indices in the 42-feature vector."""
+def get_active_features(active_feature_names: list[str] | None = None) -> dict[Layer, list[int]]:
+    """
+    Map each active layer to its feature indices in the input tensor.
+
+    Args:
+        active_feature_names: list of feature names actually present in the data.
+            If None, uses all features from ACTIVE_LAYERS.
+
+    Returns:
+        dict mapping Layer → list of column indices in the (possibly reduced) feature tensor.
+    """
+    if active_feature_names is None:
+        active_feature_names = FEATURE_NAMES
+
     layer_indices = {}
     for layer in ACTIVE_LAYERS:
         indices = []
         for sig in SIGNALS_BY_LAYER[layer]:
-            idx = FEATURE_NAMES.index(sig.name)
-            indices.append(idx)
-        layer_indices[layer] = indices
+            if sig.name in active_feature_names:
+                idx = active_feature_names.index(sig.name)
+                indices.append(idx)
+        if indices:
+            layer_indices[layer] = indices
     return layer_indices
 
 
@@ -185,7 +199,7 @@ class SignalFusionModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (B, T, NUM_FEATURES) — full 42-feature input
+        x: (B, T, n_active_features) — input features (only active columns)
         Returns: (B, num_classes) — logits
         """
         # Encode each channel independently
@@ -301,7 +315,8 @@ def train():
     train_loader = make_dataloader(train_ds, BATCH_SIZE, shuffle=True)
 
     # Model
-    layer_features = get_active_features()
+    layer_features = get_active_features(metadata.get("active_features"))
+    print(f"Active layers: {list(layer_features.keys())}")
     model = SignalFusionModel(
         layer_features=layer_features,
         d_model=D_MODEL,
