@@ -7,6 +7,7 @@ Signals: open, high, low, close, volume, trade_count
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import httpx
@@ -90,14 +91,16 @@ class KrakenOHLCVCollector(Collector):
         symbol: str = "BTC/USD",
         since: int | None = None,
         interval: int = 15,
+        days: int = 90,
     ) -> list[tuple[float, dict]]:
         """
-        Fetch historical OHLCV from Kraken.
+        Fetch historical OHLCV from Kraken with pagination.
 
         Args:
             symbol: trading pair
-            since: Unix timestamp to start from (None = oldest available)
+            since: Unix timestamp to start from (None = auto-calculate from days)
             interval: bar interval in minutes (1, 5, 15, 30, 60, 240, 1440)
+            days: number of days of history to fetch (default 90)
 
         Returns:
             List of (timestamp, values_dict) tuples
@@ -106,21 +109,31 @@ class KrakenOHLCVCollector(Collector):
         if not pair:
             return []
 
+        if since is None:
+            since = int(time.time()) - (days * 86400)
+
         all_rows = []
-        params = {"pair": pair, "interval": interval}
-        if since:
-            params["since"] = since
+        cursor = since
 
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{self.BASE_URL}/OHLC", params=params)
-            data = resp.json()
+            while True:
+                params = {"pair": pair, "interval": interval, "since": cursor}
+                resp = await client.get(f"{self.BASE_URL}/OHLC", params=params)
+                data = resp.json()
 
-            if data.get("error"):
-                print(f"Kraken backfill error: {data['error']}")
-                return []
+                if data.get("error"):
+                    print(f"Kraken backfill error: {data['error']}")
+                    break
 
-            bars = list(data.get("result", {}).values())
-            if bars and isinstance(bars[0], list):
+                # Get the "last" cursor for pagination
+                result = data.get("result", {})
+                last = result.pop("last", None)
+
+                bars = list(result.values())
+                if not bars or not isinstance(bars[0], list) or len(bars[0]) == 0:
+                    break
+
+                batch_count = 0
                 for bar in bars[0]:
                     ts = float(bar[0])
                     values = {
@@ -132,5 +145,20 @@ class KrakenOHLCVCollector(Collector):
                         "trade_count": float(bar[7]),
                     }
                     all_rows.append((ts, values))
+                    batch_count += 1
+
+                # If we got fewer than 720 bars, we've reached the end
+                if batch_count < 700 or last is None:
+                    break
+
+                cursor = last
+                # Small delay to be respectful to the API
+                await asyncio.sleep(1)
+
+        # Deduplicate by timestamp and sort
+        seen = {}
+        for ts, vals in all_rows:
+            seen[ts] = vals
+        all_rows = sorted(seen.items(), key=lambda x: x[0])
 
         return all_rows
