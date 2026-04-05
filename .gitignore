@@ -1,0 +1,31 @@
+# Data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/preprocessed/
+data/raw/
+
+# Training artifacts
+runs/
+checkpoints/
+*.pt
+*.pth
+run.log
+results.tsv
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
