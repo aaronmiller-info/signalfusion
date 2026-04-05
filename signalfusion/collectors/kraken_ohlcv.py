@@ -140,7 +140,7 @@ class KrakenOHLCVCollector(Collector):
                     "limit": 1000,
                 }
                 resp = await client.get(
-                    "https://api.binance.com/api/v3/klines", params=params
+                    "https://api.binance.us/api/v3/klines", params=params
                 )
                 bars = resp.json()
 
