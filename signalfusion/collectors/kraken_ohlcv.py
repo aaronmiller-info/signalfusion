@@ -15,6 +15,16 @@ import httpx
 from signalfusion.collectors.base import Collector
 from signalfusion.data.schema import SYMBOLS
 
+# Binance pair mapping (USDT pairs for deep history backfill)
+BINANCE_PAIRS = {
+    "BTC/USD": "BTCUSDT",
+    "ETH/USD": "ETHUSDT",
+    "SOL/USD": "SOLUSDT",
+    "XRP/USD": "XRPUSDT",
+    "LINK/USD": "LINKUSDT",
+    "AVAX/USD": "AVAXUSDT",
+}
+
 # Kraken pair name mapping
 KRAKEN_PAIRS = {
     "BTC/USD": "XXBTZUSD",
@@ -94,71 +104,69 @@ class KrakenOHLCVCollector(Collector):
         days: int = 90,
     ) -> list[tuple[float, dict]]:
         """
-        Fetch historical OHLCV from Kraken with pagination.
+        Fetch historical OHLCV from Binance klines API (deep history).
+
+        Uses Binance USDT pairs for backfill since Kraken's OHLC endpoint
+        is limited to ~720 recent bars. Price action is equivalent for
+        training purposes.
 
         Args:
-            symbol: trading pair
+            symbol: trading pair (e.g. "BTC/USD")
             since: Unix timestamp to start from (None = auto-calculate from days)
-            interval: bar interval in minutes (1, 5, 15, 30, 60, 240, 1440)
+            interval: bar interval in minutes (only 15 supported for backfill)
             days: number of days of history to fetch (default 90)
 
         Returns:
             List of (timestamp, values_dict) tuples
         """
-        pair = KRAKEN_PAIRS.get(symbol)
-        if not pair:
+        binance_pair = BINANCE_PAIRS.get(symbol)
+        if not binance_pair:
             return []
 
         if since is None:
             since = int(time.time()) - (days * 86400)
 
+        start_ms = since * 1000
+        end_ms = int(time.time() * 1000)
         all_rows = []
-        cursor = since
 
         async with httpx.AsyncClient(timeout=30) as client:
-            while True:
-                params = {"pair": pair, "interval": interval, "since": cursor}
-                resp = await client.get(f"{self.BASE_URL}/OHLC", params=params)
-                data = resp.json()
+            cursor_ms = start_ms
+            while cursor_ms < end_ms:
+                params = {
+                    "symbol": binance_pair,
+                    "interval": "15m",
+                    "startTime": cursor_ms,
+                    "limit": 1000,
+                }
+                resp = await client.get(
+                    "https://api.binance.com/api/v3/klines", params=params
+                )
+                bars = resp.json()
 
-                if data.get("error"):
-                    print(f"Kraken backfill error: {data['error']}")
+                if not isinstance(bars, list) or len(bars) == 0:
                     break
 
-                # Get the "last" cursor for pagination
-                result = data.get("result", {})
-                last = result.pop("last", None)
-
-                bars = list(result.values())
-                if not bars or not isinstance(bars[0], list) or len(bars[0]) == 0:
-                    break
-
-                batch_count = 0
-                for bar in bars[0]:
-                    ts = float(bar[0])
+                for bar in bars:
+                    # Binance kline: [openTime, open, high, low, close, volume,
+                    #                  closeTime, quoteVolume, trades, ...]
+                    ts = bar[0] / 1000  # ms → seconds
                     values = {
                         "open": float(bar[1]),
                         "high": float(bar[2]),
                         "low": float(bar[3]),
                         "close": float(bar[4]),
-                        "volume": float(bar[6]),
-                        "trade_count": float(bar[7]),
+                        "volume": float(bar[5]),
+                        "trade_count": float(bar[8]),
                     }
                     all_rows.append((ts, values))
-                    batch_count += 1
 
-                # If we got fewer than 720 bars, we've reached the end
-                if batch_count < 700 or last is None:
+                # Advance cursor past the last bar
+                cursor_ms = bars[-1][0] + 1
+
+                if len(bars) < 1000:
                     break
 
-                cursor = last
-                # Small delay to be respectful to the API
-                await asyncio.sleep(1)
-
-        # Deduplicate by timestamp and sort
-        seen = {}
-        for ts, vals in all_rows:
-            seen[ts] = vals
-        all_rows = sorted(seen.items(), key=lambda x: x[0])
+                await asyncio.sleep(0.2)
 
         return all_rows
